@@ -1528,7 +1528,12 @@ function! s:term_gen_name(mode, opts, pid)
 		let mode = has('nvim')? 2 : 1
 	endif
 	if mode == 1
-		let name = '!' . command
+		let l:given_name = get(a:opts, 'name', '')
+		if l:given_name != ''
+			let name = l:given_name
+		else
+			let name = '!' . command
+		endif
 	elseif mode == 2
 		let name = printf('term://~//%d:%s', pid, command)
 	elseif mode == 3
