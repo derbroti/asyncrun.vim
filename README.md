@@ -1,3 +1,8 @@
+## Fork Note
+
+When running a command in `-mode=term`, use the name given in `-name=<name>` to name the buffer.
+With this we can easily close it with `:bd <name>`.
+
 # Preface
 
 This plugin takes the advantage of new APIs in Vim 8 (and NeoVim) to enable you to run shell commands in the background and read the output in the quickfix window in realtime:
