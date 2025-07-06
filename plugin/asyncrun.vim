@@ -118,6 +118,24 @@
 "- Global Settings & Variables
 "----------------------------------------------------------------------
 
+autocmd User async_run_job_printed silent
+autocmd User async_run_job_timer silent
+
+let g:asyncrun_raw_output_bufnr = get(g:, 'asyncrun_raw_output_bufnr', bufadd(''))
+call bufload(g:asyncrun_raw_output_bufnr)
+
+call setbufvar(g:asyncrun_raw_output_bufnr, '&modifiable', 0)
+call setbufvar(g:asyncrun_raw_output_bufnr, '&buftype', 'nofile')
+call setbufvar(g:asyncrun_raw_output_bufnr, '&filetype', 'qf')
+call setbufvar(g:asyncrun_raw_output_bufnr, '&bufhidden', 'hide')
+call setbufvar(g:asyncrun_raw_output_bufnr, '&swapfile', 0)
+call setbufvar(g:asyncrun_raw_output_bufnr, '&undofile', 0)
+call setbufvar(g:asyncrun_raw_output_bufnr, '&buflisted', 0)
+
+
+" Map paths whn running make remote...
+let g:asyncrun_map_paths = get(g:, 'asyncrun_map_paths', [])
+
 " script will be executed after finished.
 let g:asyncrun_exit = get(g:, 'asyncrun_exit', '')
 
@@ -188,7 +206,7 @@ let g:asyncrun_silent = get(g:, 'asyncrun_silent', 1)
 " skip autocmds
 let g:asyncrun_skip = get(g:, 'asyncrun_skip', 0)
 
-" last args 
+" last args
 let g:asyncrun_info = get(g:, 'asyncrun_info', '')
 
 " 0: no save, 1: save current buffer, 2: save all modified buffers.
@@ -211,6 +229,8 @@ let g:asyncrun_event = get(g:, 'asyncrun_event', {})
 " terminal job name
 let g:asyncrun_name = ''
 
+" stores raw output of last run - line by line
+let g:asyncrun_raw_output = []
 
 
 "----------------------------------------------------------------------
@@ -324,6 +344,25 @@ endif
 " check qfid
 let s:has_qfid = has('patch-8.0.1023') || has('nvim-0.6.1')
 
+fun s:appendTextToRawBuffer(text)
+	let l:on_last_line = v:false
+	if bufwinnr(g:asyncrun_raw_output_bufnr) != -1
+		let l:on_last_line = (line('.') == line('$'))
+	endif
+
+	call setbufvar(g:asyncrun_raw_output_bufnr, '&modifiable', 1)
+	if getbufoneline(g:asyncrun_raw_output_bufnr, 1) == ''
+		call setbufline(g:asyncrun_raw_output_bufnr, 1, a:text)
+	else
+		call appendbufline(g:asyncrun_raw_output_bufnr, '$', a:text)
+	endif
+	call setbufvar(g:asyncrun_raw_output_bufnr, '&modifiable', 0)
+
+	if l:on_last_line == v:true
+		call cursor(line('$'), 1)
+	endif
+endfun
+
 
 "----------------------------------------------------------------------
 "- build in background
@@ -358,6 +397,13 @@ endif
 
 " append to quickfix
 function! s:AppendText(textlist, raw)
+	" map paths if for example the command is run on a different host (ssh)...
+	for idx in range(len(a:textlist))
+		for m in g:asyncrun_map_paths
+			let a:textlist[idx] = substitute(a:textlist[idx], m[0], m[1], 'g')
+		endfor
+	endfor
+
 	let qfid = s:async_info.qfid
 	if qfid < 0
 		if a:raw == 0
@@ -544,6 +590,9 @@ function! g:AsyncRun_Job_OnTimer(id)
 	if &ft == 'vim' && &buftype == 'nofile'
 		return
 	endif
+
+	doautocmd <nomodeline> User async_run_job_timer
+
 	if s:async_nvim == 0
 		if exists('s:async_job')
 			call job_status(s:async_job)
@@ -570,7 +619,12 @@ function! s:AsyncRun_Job_OnCallback(channel, text)
 	if type(a:text) != 1
 		return
 	endif
+
+	doautocmd <nomodeline> User async_run_job_printed
+
 	let s:async_output[s:async_head] = a:text
+	" let s:async_output_copy += [a:text]
+	call s:appendTextToRawBuffer(a:text)
 	let s:async_head += 1
 	if s:async_congest != 0
 		if s:async_info.once == 0
@@ -679,6 +733,8 @@ function! s:AsyncRun_Job_NeoVim(job_id, data, event)
 			let cache .= a:data[l:index]
 			if l:index + 1 < l:size
 				let s:async_output[s:async_head] = cache
+				" let s:async_output_copy += [cache]
+				call s:appendTextToRawBuffer(cache)
 				let s:async_head += 1
 				let cache = ''
 			endif
@@ -695,10 +751,14 @@ function! s:AsyncRun_Job_NeoVim(job_id, data, event)
 		endif
 		if s:neovim_stdout != ''
 			let s:async_output[s:async_head] = s:neovim_stdout
+			" let s:async_output_copy += s:neovim_stdout
+			call s:appendTextToRawBuffer(s:neovim_stdout)
 			let s:async_head += 1
 		endif
 		if s:neovim_stderr != ''
 			let s:async_output[s:async_head] = s:neovim_stderr
+			" let s:async_output_copy += s:neovim_stderr
+			call s:appendTextToRawBuffer(s:neovim_stderr)
 			let s:async_head += 1
 		endif
 		let s:async_state = or(s:async_state, 6)
@@ -768,10 +828,10 @@ function! s:AsyncRun_Job_Start(cmd)
 		if s:asyncrun_windows == 0
 			let l:temp = []
 			for l:item in a:cmd
-				if index(['|', '`'], l:item) < 0
+				if index(['X', '`'], l:item) < 0
 					let l:temp += [fnameescape(l:item)]
 				else
-					let l:temp += ['|']
+					let l:temp += ['X']
 				endif
 			endfor
 			let l:args += [join(l:temp, ' ')]
@@ -786,6 +846,10 @@ function! s:AsyncRun_Job_Start(cmd)
 	endif
 	let s:async_state = 0
 	let s:async_output = {}
+	" let s:async_output_copy = []
+	call setbufvar(g:asyncrun_raw_output_bufnr, '&modifiable', 1)
+	silent call deletebufline(g:asyncrun_raw_output_bufnr, 1, '$')
+	call setbufvar(g:asyncrun_raw_output_bufnr, '&modifiable', 0)
 	let s:async_head = 0
 	let s:async_tail = 0
 	let s:async_info.post = s:async_info.postsave
@@ -835,7 +899,7 @@ function! s:AsyncRun_Job_Start(cmd)
 		let l:callbacks['on_exit'] = function('s:AsyncRun_Job_NeoVim')
 		let s:neovim_stdout = ''
 		let s:neovim_stderr = ''
-		if s:async_info.range <= 0 
+		if s:async_info.range <= 0
 			if g:asyncrun_stdin == 0 && has('nvim-0.6.0')
 				let l:callbacks.stdin = 'null'
 			endif
@@ -897,7 +961,7 @@ function! s:AsyncRun_Job_Start(cmd)
 			call s:AppendText([l:arguments], 1)
 		endif
 		let l:name = 'g:AsyncRun_Job_OnTimer'
-		let s:async_timer = timer_start(100, l:name, {'repeat':-1})
+		let s:async_timer = timer_start(250, l:name, {'repeat':-1})
 		call s:AsyncRun_Job_AutoCmd(0, s:async_info.auto)
 		call s:AutoCmd('Start')
 		redrawstatus!
@@ -1697,7 +1761,7 @@ function! s:start_in_terminal(opts)
 		let rows = get(a:opts, 'rows', '')
 		let cols = get(a:opts, 'cols', '')
 		if pos == 'top'
-			exec "leftabove " . rows . "split"	
+			exec "leftabove " . rows . "split"
 		elseif pos == 'bottom' || pos == 'bot'
 			exec "rightbelow " . rows . "split"
 		elseif pos == 'left'
@@ -1708,7 +1772,7 @@ function! s:start_in_terminal(opts)
 			exec "rightbelow " . rows . "split"
 		endif
 	endif
-	if avail > 0 
+	if avail > 0
 		exec "normal! ". avail . "\<c-w>\<c-w>"
 		let a:opts._terminal_wipe = bufnr('%')
 	endif
@@ -2288,8 +2352,10 @@ endfunc
 function! asyncrun#stop(bang)
 	if a:bang == ''
 		return s:AsyncRun_Job_Stop('term')
-	else
+	elseif a:bang == '!'
 		return s:AsyncRun_Job_Stop('kill')
+	else
+		return s:AsyncRun_Job_Stop(a:bang)
 	endif
 endfunc
 
@@ -2336,6 +2402,7 @@ command! -bang -nargs=+ -range=0 -complete=file AsyncRun
 		\ call asyncrun#run('<bang>', '', <q-args>, <count>, <line1>, <line2>)
 
 command! -bar -bang -nargs=0 AsyncStop call asyncrun#stop('<bang>')
+command! -nargs=0 AsyncInt call asyncrun#stop('int')
 
 command! -nargs=0 AsyncReset call asyncrun#reset()
 
@@ -2417,6 +2484,12 @@ function! s:program_msys(opts)
 	return tmpname
 endfunc
 
+" "----------------------------------------------------------------------
+" " Return last command output - raw
+" "----------------------------------------------------------------------
+" function! asyncrun#get_output()
+" 	return s:async_output_copy
+" endfunc
 
 "----------------------------------------------------------------------
 " Fast command to toggle quickfix
@@ -2424,9 +2497,14 @@ endfunc
 function! asyncrun#quickfix_toggle(size, ...)
 	let l:mode = (a:0 == 0)? 2 : (a:1)
 	function! s:WindowCheck(mode)
-		if &buftype == 'quickfix'
-			let s:quickfix_open = 1
-			return
+		if &filetype == 'qf'
+		   if &buftype == 'quickfix'
+				let s:quickfix_open = 1
+				return
+			elseif &buftype == 'nofile'
+				let s:quickfix_open = 2
+				return
+			endif
 		endif
 		if a:mode == 0
 			let w:quickfix_save = winsaveview()
@@ -2442,8 +2520,13 @@ function! asyncrun#quickfix_toggle(size, ...)
 	keepalt noautocmd windo call s:WindowCheck(0)
 	keepalt noautocmd silent! exec ''.l:winnr.'wincmd w'
 	if l:mode == 0
-		if s:quickfix_open != 0
+		if s:quickfix_open == 1
 			silent! cclose
+		elseif s:quickfix_open == 2
+			let raw_win = bufwinnr(g:asyncrun_raw_output_bufnr)
+			if raw_win != -1
+				exe raw_win . "wincmd c"
+			endif
 		endif
 	elseif l:mode == 1
 		if s:quickfix_open == 0
@@ -2454,8 +2537,13 @@ function! asyncrun#quickfix_toggle(size, ...)
 		if s:quickfix_open == 0
 			keepalt exec 'botright copen '. ((a:size > 0)? a:size : ' ')
 			keepalt wincmd k
-		else
+		elseif s:quickfix_open == 1
 			silent! cclose
+		elseif s:quickfix_open == 2
+			let raw_win = bufwinnr(g:asyncrun_raw_output_bufnr)
+			if raw_win != -1
+				exe raw_win . "wincmd c"
+			endif
 		endif
 	endif
 	keepalt noautocmd windo call s:WindowCheck(1)
