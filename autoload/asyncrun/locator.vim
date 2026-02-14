@@ -119,6 +119,14 @@ function! asyncrun#locator#nofile_buffer_path() abort
 				catch
 				endtry
 			endif
+		elseif &ft == 'fern'
+			let t = bufname('%')
+			if t =~ '\v^fern\:\/\/\w+\/file\:\/\/'
+				let t = matchstr(t, '\v^fern\:\/\/\w+\/file\:\/\/\zs.*\ze\$')
+				if t != ''
+					return (s:windows)? strpart(t, 1) : t
+				endif
+			endif
 		endif
 		if exists('b:git_dir')
 			return b:git_dir
@@ -142,7 +150,7 @@ endfunc
 "----------------------------------------------------------------------
 " root locator
 "----------------------------------------------------------------------
-function! asyncrun#locator#detect()
+function! asyncrun#locator#detect(name)
 	if &bt == ''
 		return asyncrun#locator#special_buffer_path()
 	endif
